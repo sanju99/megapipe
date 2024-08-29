@@ -1,0 +1,9 @@
+.ipynb_checkpoints/
+__pycache__/
+archive/
+
+# too big or too many files. also could be sensitive data
+*.gz
+
+# snakemake files that are specific to the workflow
+.snakemake/
