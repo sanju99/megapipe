@@ -1,0 +1,15 @@
+rule bbmap_repair:
+    input:
+        ""
+    output:
+        
+
+
+rule bwa_map:
+    input:
+        "data/genome.fa",
+        "data/samples/{sample}.fastq"
+    output:
+        "mapped_reads/{sample}.bam"
+    shell:
+        "bwa mem {input} | samtools view -Sb - > {output}"

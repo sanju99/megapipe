@@ -5,9 +5,9 @@ from Bio import Entrez, Seq, SeqIO
 
 h37Rv_genes_df = pd.read_csv("./references/ref_genome/mycobrowser_h37rv_genes_v4.csv")
 
-# dataframe of the gene(s) that each position of H37Rv is in. If not a gene, then the region is NC_{num}. This was made from the mycobrowser genes dataframe above, so the same genes and noncoding regions are reflected
+# dataframe of the gene(s) that each position of H37Rv is in. This was made from the mycobrowser genes dataframe above, so the same genes and noncoding regions are reflected
+# only positions in coding regions are included in this file
 h37Rv_coords_to_gene = pd.read_csv("./references/ref_genome/H37Rv_coords_to_gene.csv")
-h37Rv_coords_to_gene_dict = dict(zip(h37Rv_coords_to_gene['pos'], h37Rv_coords_to_gene['region']))
 
 h37Rv = SeqIO.read("./references/ref_genome/GCF_000195955.2_ASM19595v2_genomic.gbff", "genbank")
 
@@ -49,11 +49,12 @@ def get_codon_from_pos(pos, h37Rv_genes_df):
 
     Sense doesn't matter in this script because all variants are stored in the positive sense direction.
     '''
-
-    gene = h37Rv_coords_to_gene_dict[pos]
-
-    if gene.startswith('NC'):
+    
+    # meaning the position is not in the gene sequence
+    if pos not in h37Rv_coords_to_gene.coord.values:
         return None
+
+    gene = h37Rv_coords_to_gene.query("coord==@pos")['gene'].values[0]
 
     # multiple genes because they overlap
     if ',' in gene:
