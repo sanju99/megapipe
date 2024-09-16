@@ -5,9 +5,12 @@ import sys, os, argparse
 parser = argparse.ArgumentParser()
 
 # Add a required string argument for the config file
-parser.add_argument("-i", dest='depths_fName', type=str, required=True)
+parser.add_argument("-i", dest='depths_fName', type=str, required=True, help='Input gzipped tab-separated file of read depths across an alignment')
 
-parser.add_argument("-b", dest="BAM_files_lst", type=list, require=True)
+# allow multiple sctrings for the BAM files list argument so that any number can be passed in
+parser.add_argument("-b", '--bam-files', dest="BAM_files_lst", nargs='+', type=str, required=True, help='List of BAM files associated with this sample')
+
+parser.add_argument("-o", dest='output_fName', type=str, required=True, help='Output text file to write the BAM files that pass the QC thresholds to')
 
 parser.add_argument('--median-depth', dest='median_depth_thresh', default=15, type=int, help='Minimum median depth (exclusive) that an alignment must meet to be included')
 
@@ -19,18 +22,17 @@ cmd_line_args = parser.parse_args()
 
 depths_fName = cmd_line_args.depths_fName
 BAM_files_lst = cmd_line_args.BAM_files_lst
+output_fName = cmd_line_args.output_fName
 median_depth_thresh = cmd_line_args.median_depth_thresh
 min_cov = cmd_line_args.min_cov
 genome_cov_prop = cmd_line_args.genome_cov_prop
 
-# sample_ID = os.path.basename(sample_dir)
 depths = pd.read_csv(depths_fName, sep='\t', header=None)
-print(depths.head())
 
 # write output files to the same directory as the depth file
-sample_dir = os.path.dirname(depths)
-print(sample_dir)
+sample_bam_dir = os.path.dirname(depths_fName)
 
+# the first two columns are CHROM and POS, so there should be 2 + N columns in the depths dataframe, where N is the number of runs
 if len(BAM_files_lst) + 2 != depths.shape[1]:
     raise ValueError(f"Number of columns in {depths_fName} is not consistent with {len(BAM_files_lst)} sequencing runs")
 
@@ -39,7 +41,7 @@ if depths.shape[1] < 3:
 
 depths.columns = ['CHROM', 'POS'] + BAM_files_lst
 
-with open(f"{sample_dir}/bam/pass_run_IDs.txt", "w+") as file:
+with open(output_fName, "w+") as file:
     
     for BAM_file in BAM_files_lst:
     
@@ -50,6 +52,6 @@ with open(f"{sample_dir}/bam/pass_run_IDs.txt", "w+") as file:
         prop_sites_cov_thresh = np.round(len(depths.loc[depths[BAM_file] >= min_cov]) / len(depths), 2)
 
         # if the BAM file passes the thresholds, write it to the pass_run_IDs file to be used in the merge BAMS rule
-        if median > median_depth_thresh and prop_sites_cov_thresh >= genome_cov_prop:
+        if median >= median_depth_thresh and prop_sites_cov_thresh >= genome_cov_prop:
 
             file.write(BAM_file + "\n")

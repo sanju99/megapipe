@@ -3,13 +3,13 @@ import pandas as pd
 import os, vcf, sys, itertools, argparse
 from Bio import Entrez, Seq, SeqIO
 
-h37Rv_genes_df = pd.read_csv("/n/data1/hms/dbmi/farhat/Sanjana/H37Rv/mycobrowser_h37rv_genes_v4.csv")
+h37Rv_genes_df = pd.read_csv("./references/ref_genome/mycobrowser_h37rv_genes_v4.csv")
 
 # dataframe of the gene(s) that each position of H37Rv is in. If not a gene, then the region is NC_{num}. This was made from the mycobrowser genes dataframe above, so the same genes and noncoding regions are reflected
-h37Rv_coords_to_gene = pd.read_csv("/n/data1/hms/dbmi/farhat/Sanjana/H37Rv/h37Rv_coords_to_gene.csv")
+h37Rv_coords_to_gene = pd.read_csv("./references/ref_genome/H37Rv_coords_to_gene.csv")
 h37Rv_coords_to_gene_dict = dict(zip(h37Rv_coords_to_gene['pos'], h37Rv_coords_to_gene['region']))
 
-h37Rv = SeqIO.read("/n/data1/hms/dbmi/farhat/Sanjana/H37Rv/GCF_000195955.2_ASM19595v2_genomic.gbff", "genbank")
+h37Rv = SeqIO.read("./references/ref_genome/GCF_000195955.2_ASM19595v2_genomic.gbff", "genbank")
 
 # goal: combine SNPs in a VCF file that occur on the same codon so that snpEff will annotate them properly
 # snpEff does not natively consider multiple variants on the same codon and will annotate them as though they occur separately
@@ -66,7 +66,7 @@ def get_codon_from_pos(pos, h37Rv_genes_df):
     # iterate through to account for multiple genes because they overlap
     for single_gene in gene:
         if single_gene not in h37Rv_genes_df.Symbol.values:
-            raise ValueError(f"{single_gene} is not in /n/data1/hms/dbmi/farhat/Sanjana/H37Rv/mycobrowser_h37rv_genes_v4.csv")
+            raise ValueError(f"{single_gene} is not a valid gene in Mycobrowser")
     
         else:
             start, end = h37Rv_genes_df.query("Symbol==@single_gene")[['Start', 'End']].values[0]

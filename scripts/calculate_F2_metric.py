@@ -6,16 +6,20 @@ parser = argparse.ArgumentParser()
 
 # dest indicates the name that each argument is stored in so that you can access it after running .parse_args()
 parser.add_argument('-i', type=str, dest='sample_dir', help='Lineage directory where all input and output files are', required=True)
+parser.add_argument('-o', type=str, dest='F2_fName', help='Output text file to write the F2 metric to', required=True)
+parser.add_argument('--lineage-file', dest='lineage_defining_SNPs_file', help='File of all lineage-defining SNPs for the Coll scheme', required=True)
 
 cmd_line_args = parser.parse_args()
 sample_dir = cmd_line_args.sample_dir
+F2_fName = cmd_line_args.F2_fName
+lineage_defining_SNPs_file = cmd_line_args.lineage_defining_SNPs_file
 
 
 ##########################################################################################################################################################
 
 
 # Lineage Defining SNPs - Import full set of Lineage Defining SNP sets from Coll et. al. 2014
-lineage_defining_SNPs = pd.read_csv("/home/sak0914/MtbQuantCNN/data_processing/variant_calling/Coll2014_SNPs_all.csv").rename(columns={"#lineage": "lineage"})
+lineage_defining_SNPs = pd.read_csv(lineage_defining_SNPs_file).rename(columns={"#lineage": "lineage"})
 lineage_defining_SNPs['lineage'] = [val.replace('lineage', '') for val in lineage_defining_SNPs['lineage'].values]
 
 # According to Wyllie et. al. 2018, drop SNP sets corresponding to branches with fewer than 20 SNPs
@@ -233,27 +237,15 @@ def calculate_F2(sorted_minor_allele_fraction_per_SNP_set, lineage_SNP_depths_fr
 
 sample_ID = os.path.basename(sample_dir)
 reduced_VCF = os.path.join(sample_dir, "lineage", f"{sample_ID}_lineage_positions.vcf")
-F2_txt = os.path.join(sample_dir, "lineage", f'{sample_ID}_F2_Coll2014.txt')
 
-# may not exist for all isolates if they didn't pass BAM file QC or if F2 metric was already computed
-if os.path.isfile(F2_txt):
-    print(f"Already computed F2 score for {sample_ID}")
-else:
-    if os.path.isfile(reduced_VCF):
+# get lineage defining SNP depths for SNPs in all SNP sets
+lineage_SNP_depths_from_sample_df = get_lineage_defining_SNP_depths(reduced_VCF)
 
-        print(f"Computing F2 score for {sample_ID}")
-        
-        # get lineage defining SNP depths for SNPs in all SNP sets
-        lineage_SNP_depths_from_sample_df = get_lineage_defining_SNP_depths(reduced_VCF)
-        
-        # calculate minor allele frequency estimates for all SNP sets & sort in descending order
-        sorted_minor_allele_fraction_per_SNP_set = calculate_minor_allele_fraction_per_SNP_set(lineage_SNP_depths_from_sample_df)
-    
-        # calculate F2 measure from the depths at lineage defining sites
-        F2 = calculate_F2(sorted_minor_allele_fraction_per_SNP_set, lineage_SNP_depths_from_sample_df)
-        
-        with open(F2_txt, 'w+') as file:
-            file.write(str(F2))
-    
-    else:
-        print(f"Lineage files not found for {sample_ID}")
+# calculate minor allele frequency estimates for all SNP sets & sort in descending order
+sorted_minor_allele_fraction_per_SNP_set = calculate_minor_allele_fraction_per_SNP_set(lineage_SNP_depths_from_sample_df)
+
+# calculate F2 measure from the depths at lineage defining sites
+F2 = calculate_F2(sorted_minor_allele_fraction_per_SNP_set, lineage_SNP_depths_from_sample_df)
+
+with open(F2_fName, 'w+') as file:
+    file.write(str(F2) + "\n")

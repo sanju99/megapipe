@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-import glob, os, yaml, itertools, subprocess, sys, shutil, sparse, re, vcf, warnings, argparse
+import glob, os, re, warnings, argparse
 warnings.filterwarnings("ignore")
 
 import Bio.SeqUtils
@@ -8,7 +8,7 @@ import Bio.Data
 from Bio import Seq, SeqIO, Entrez
 
 # dataframe of all regions in H37Rv and their coordinates. Includes genes and non-coding regions
-h37Rv_full = pd.read_csv("/n/data1/hms/dbmi/farhat/Sanjana/H37Rv/mycobrowser_h37rv_v4.csv")
+h37Rv_full = pd.read_csv("./references/ref_genome/mycobrowser_h37rv_v4.csv")
 
 ################################################################## NOTES ##################################################################
 
@@ -16,7 +16,7 @@ h37Rv_full = pd.read_csv("/n/data1/hms/dbmi/farhat/Sanjana/H37Rv/mycobrowser_h37
 # silent variants composed of MNVs are formatted like this in the catalog: katG_c.CTCinsGAT, whereas the combineCodons function outputs katG_c.CTC>GAT
 
 # this includes LoF variants -- i.e. Rv0678_LoF is significantly associated with Bedaquiline resistance, so all component LoF mutations (frameshift, stop gained, start lost) are Group 2) Assoc w R - Interim
-who_catalog_V2 = pd.read_csv("/home/sak0914/MtbQuantCNN/data_processing/data_utils/WHO_catalog_V2.csv", header=[2])
+who_catalog_V2 = pd.read_csv("./references/WHO_catalog_resistance/V2_catalog.csv", header=[2])
 who_catalog_V2 = who_catalog_V2[['drug', 'variant', 'FINAL CONFIDENCE GRADING', 'Comment']].rename(columns={'FINAL CONFIDENCE GRADING': 'confidence'})
 
 parser = argparse.ArgumentParser()
@@ -485,9 +485,11 @@ if os.path.isfile(output_file):
     exit()
     
 # read in variants TSV file, remove imprecise variants from this
-try:
-    df = pd.read_csv(input_file, sep='\t')
-except:
+df = pd.read_csv(input_file, sep='\t')
+
+if len(df) == 0:
+    # save empty dataframe
+    df.to_csv(output_file, sep='\t', index=False)
     print(f"{input_file} is empty, which means that are no variants in the WHO catalog regions")
     exit()
     
@@ -495,6 +497,8 @@ except:
 df = df.query("IMPRECISE == False")
 
 if len(df) == 0:
+    # save empty dataframe
+    df.to_csv(output_file, sep='\t', index=False)
     print(f"There are only imprecise variants in the WHO catalog regions in {input_file}")
     exit()
 
@@ -506,6 +510,8 @@ df = split_annotations(df)
 df = df.loc[(~pd.isnull(df['EFFECT'])) & (~df['EFFECT'].str.contains('fusion'))].dropna(subset='GENE').reset_index(drop=True)
 
 if len(df) == 0:
+    # save empty dataframe
+    df.to_csv(output_file, sep='\t', index=False)
     print(f"There are only gene fusion variants in the WHO catalog regions in {input_file}")
     exit()
         

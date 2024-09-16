@@ -46,6 +46,6 @@ fi
 gzip -c $FQ1_fName > "$sample_out_dir/$run_ID/${run_ID}_R1.fastq.gz"
 gzip -c $FQ2_fName > "$sample_out_dir/$run_ID/${run_ID}_R2.fastq.gz"
 
-# delete the unzipped files
-rm $FQ1_fName
-rm $FQ2_fName
+# # delete the unzipped files
+# rm $FQ1_fName
+# rm $FQ2_fName

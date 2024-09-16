@@ -2,7 +2,7 @@ import os, glob
 import numpy as np
 import pandas as pd
 
-# define some paths to reduce string redundancy
+# define some paths to make the path names more readable
 sample_out_dir = f"{output_dir}/{{sample_ID}}"
 run_out_dir = f"{output_dir}/{{sample_ID}}/{{run_ID}}"
 
@@ -46,10 +46,10 @@ rule trim_adapters:
     conda:
         "./envs/bioinformatics.yaml"
     params:
-        min_length = config["min_length"]
+        min_read_length = config["min_read_length"]
     shell:
         """
-        fastp -i {input.fastq1} -I {input.fastq2} -o {output.fastq1_trimmed} -O {output.fastq2_trimmed} -h {output.fastp_html} -j {output.fastp_json} --length_required {params.min_length} --dedup --thread 8
+        fastp -i {input.fastq1} -I {input.fastq2} -o {output.fastq1_trimmed} -O {output.fastq2_trimmed} -h {output.fastp_html} -j {output.fastp_json} --length_required {params.min_read_length} --dedup --thread 8
 
         # rm {input.fastq1} {input.fastq2}
         """
@@ -88,7 +88,7 @@ rule fastlin_typing:
     conda:
         "./envs/bioinformatics.yaml"
     params:
-        fastlin_barcodes = os.path.join(references_dir, "MTBC_barcodes.tsv"),
+        fastlin_barcodes = os.path.join(references_dir, "phylogeny", "MTBC_barcodes.tsv"),
     shell:
         """
         gzip -c {input.fastq1_trimmed_classified} > {output.fastq1_trimmed_classified_gzipped}
@@ -160,6 +160,8 @@ rule check_fastlin:
 
 rule align_reads_mark_duplicates:
     input:
+        # require the fastlin output file as an input so that the fastlin rule gets run
+        fastlin_output = f"{run_out_dir}/fastlin/output.txt",
         fastq1_trimmed_classified=f"{run_out_dir}/kraken/{{run_ID}}_1.kraken.filtered.fastq",
         fastq2_trimmed_classified=f"{run_out_dir}/kraken/{{run_ID}}_2.kraken.filtered.fastq",
     output:
@@ -171,16 +173,16 @@ rule align_reads_mark_duplicates:
         bam_index_file_dedup = f"{run_out_dir}/bam/{{run_ID}}.dedup.bam.bai",
     params:
         output_dir = output_dir,
-        ref_genome = config["ref_genome"],
+        ref_genome = os.path.join(references_dir, "ref_genome", "H37Rv_NC_000962.3.fna"),
     conda:
         "./envs/bioinformatics.yaml"
     shell:
         """
         # index reference genome (which is required before aligning reads)
-        bwa index {params.ref_genome}
+        bwa-mem2 index {params.ref_genome}
 
         # align reads to the reference genome sequence. The RG name specifies the read group name, which is necessary if you are merging multiple WGS runs into a single BAM file
-        bwa mem -M -R "@RG\\tID:{{run_ID}}\\tSM:{{run_ID}}" -t 8 {params.ref_genome} {input.fastq1_trimmed_classified} {input.fastq2_trimmed_classified} > {output.sam_file}
+        bwa-mem2 mem -M -R "@RG\\tID:{wildcards.run_ID}\\tSM:{wildcards.run_ID}" -t 8 {params.ref_genome} {input.fastq1_trimmed_classified} {input.fastq2_trimmed_classified} > {output.sam_file}
 
         # sort alignment and convert to bam file
         samtools view -b {output.sam_file} | samtools sort > {output.bam_file}
@@ -199,14 +201,13 @@ rule align_reads_mark_duplicates:
         """
 
 
-rule get_BAM_depth:
+rule get_BAM_file_depths:
     input:
         bam_file_dedup = lambda wildcards: [f"{output_dir}/{wildcards.sample_ID}/{run_ID}/bam/{run_ID}.dedup.bam" for run_ID in sample_run_dict[wildcards.sample_ID]],
     params:
-        ref_genome = config["ref_genome"],
+        ref_genome = os.path.join(references_dir, "ref_genome", "H37Rv_NC_000962.3.fna"),
         sample_out_dir = sample_out_dir,
     output:
-        # run_IDs_file = f"{sample_out_dir}/bam/run_IDs.txt",
         depth_file = f"{sample_out_dir}/bam/{{sample_ID}}.depth.tsv",
     conda:
         "./envs/bioinformatics.yaml"
@@ -232,12 +233,12 @@ rule get_BAM_depth:
         """
 
 
-rule compute_BAMs_passing_QC_thresholds:
+rule get_BAMs_passing_QC_thresholds:
     input:
-        combined_depth_file = f"{sample_out_dir}/bam/{{sample_ID}}.depth.tsv", # contains depths for all BAM files for all WGS runs
+        depth_file = f"{sample_out_dir}/bam/{{sample_ID}}.depth.tsv", # contains depths for all BAM files for all WGS runs
         bam_file_dedup = lambda wildcards: [f"{output_dir}/{wildcards.sample_ID}/{run_ID}/bam/{run_ID}.dedup.bam" for run_ID in sample_run_dict[wildcards.sample_ID]],
     output:
-        pass_run_IDs_file = f"{sample_out_dir}/bam/pass_run_IDs.txt",
+        pass_BAMs_file = f"{sample_out_dir}/bam/pass_BAMs.txt",
         depth_file_gzip = f"{sample_out_dir}/bam/{{sample_ID}}.depth.tsv.gz",
     params:
         sample_out_dir = sample_out_dir,
@@ -248,30 +249,30 @@ rule compute_BAMs_passing_QC_thresholds:
     shell:
         """
         # run the script to determine which runs pass the BAM depth criteria
-        python3 -u {params.BAM_depth_QC_script} -i {input.combined_depth_file} -b {input.bam_file_dedup} --median-depth {params.median_depth} --min-cov {params.min_cov} --genome-cov-prop {params.genome_cov_prop}
+        python3 -u {params.BAM_depth_QC_script} -i {input.depth_file} -b {input.bam_file_dedup} -o {output.pass_BAMs_file} --median-depth {params.median_depth} --min-cov {params.min_cov} --genome-cov-prop {params.genome_cov_prop}
 
         # finally, gzip the depth file because it is very large
-        gzip {input.combined_depth_file}
+        gzip {input.depth_file}
         """
 
 
 rule merge_BAMs:
     input:
-        pass_run_IDs_file = f"{sample_out_dir}/bam/pass_run_IDs.txt",
+        pass_BAMs_file = f"{sample_out_dir}/bam/pass_BAMs.txt",
     output:
         merged_bam_file = f"{sample_out_dir}/bam/{{sample_ID}}.dedup.bam",
         merged_bam_index_file = f"{sample_out_dir}/bam/{{sample_ID}}.dedup.bam.bai",
     conda:
         "./envs/bioinformatics.yaml"
     params:
-        ref_genome = config["ref_genome"],
+        ref_genome = os.path.join(references_dir, "ref_genome", "H37Rv_NC_000962.3.fna"),
         sample_out_dir = sample_out_dir,
         median_depth = config["median_depth"],
         min_cov = config["min_cov"],
         genome_cov_prop = config["genome_cov_prop"],
     shell:
         """
-        num_runs_passed=$(wc -l {input.pass_run_IDs_file} | awk '{{print $1}}')
+        num_runs_passed=$(wc -l {input.pass_BAMs_file} | awk '{{print $1}}')
 
         # stop processing samples that don't pass the BAM coverage requirements
         if [ $num_runs_passed -eq 0 ]; then
@@ -280,16 +281,16 @@ rule merge_BAMs:
             
         else 
             # if only one BAM file passed, or there is only one sequencing run for this isolate, just use that BAM file for variant calling
-            echo "$num_runs_passed WGS runs for {wildcards.sample_ID} have median depth > {params.median_depth} and at least {params.genome_cov_prop} of sites covered {params.min_cov} times"
+            echo "$num_runs_passed WGS runs for {wildcards.sample_ID} have median depth ≥ {params.median_depth} and at least {params.genome_cov_prop} of sites with {params.min_cov}x coverage"
 
             # merge them using samtools. works because the original bam files were sorted prior to running picard and dropping duplicates (after which they remain sorted)
-            samtools merge -b {input.pass_run_IDs_file} {output.merged_bam_file}
+            samtools merge -b {input.pass_BAMs_file} {output.merged_bam_file}
 
             if [ $num_runs_passed -eq 1 ]; then
 
                 # delete the original BAM file to reduce disk space usage because it's a duplicate of the merged BAM file
-                for file_path in $(cat {input.pass_run_IDs_file}); do
-                    rm $file_path
+                for file_path in $(cat {input.pass_BAMs_file}); do
+                    rm "$file_path" "$file_path.bai"
                 done
 
             fi
@@ -307,9 +308,9 @@ rule variant_calling:
         vcf_file = temp(f"{sample_out_dir}/pilon/{{sample_ID}}.vcf"),
         vcf_file_gzip = f"{sample_out_dir}/pilon/{{sample_ID}}_full.vcf.gz",
         vcf_file_variants_only = f"{sample_out_dir}/pilon/{{sample_ID}}_variants.vcf",
-        # fasta_file = temp(f"{sample_out_dir}/pilon/{{sample_ID}}.fasta"),        
+        fasta_file = f"{sample_out_dir}/pilon/{{sample_ID}}.fasta",        
     params:
-        ref_genome = config["ref_genome"],
+        ref_genome = os.path.join(references_dir, "ref_genome", "H37Rv_NC_000962.3.fna"),
         sample_pilon_dir = f"{sample_out_dir}/pilon",
     conda:
         "./envs/bioinformatics.yaml"
@@ -324,20 +325,17 @@ rule variant_calling:
         bcftools view --types snps,indels,mnps,other {output.vcf_file_gzip} > {output.vcf_file_variants_only}
         """
 
-rule get_sample_lineage_and_F2:
+
+rule create_lineage_helper_files:
     input:
         vcf_file_gzip = f"{sample_out_dir}/pilon/{{sample_ID}}_full.vcf.gz",
-        vcf_file_variants_only = f"{sample_out_dir}/pilon/{{sample_ID}}_variants.vcf",
     params:
-        lineage_pos_for_F2 = os.path.join(references_dir, "Coll2014_positions_all.txt"),
-        F2_metric_script = os.path.join(scripts_dir, "calculate_F2_metric.py"),
+        lineage_pos_for_F2 = os.path.join(references_dir, "phylogeny", "Coll2014_positions_all.txt"),
         output_dir = output_dir,
     output:
-        bcf_file = temp(f"{sample_out_dir}/lineage/{{sample_ID}}.bcf"),
-        bcf_index_file = temp(f"{sample_out_dir}/lineage/{{sample_ID}}.bcf.csi"),
-        vcf_lineage_positions = temp(f"{sample_out_dir}/lineage/{{sample_ID}}_lineage_positions.vcf"),
-        fast_lineage_caller_output = f"{sample_out_dir}/lineage/fast_lineage_caller_output.txt",
-        F2_metric_output = f"{sample_out_dir}/lineage/{{sample_ID}}/F2_Coll2014.txt",
+        bcf_file = f"{sample_out_dir}/lineage/{{sample_ID}}.bcf",
+        bcf_index_file = f"{sample_out_dir}/lineage/{{sample_ID}}.bcf.csi",
+        vcf_lineage_positions = f"{sample_out_dir}/lineage/{{sample_ID}}_lineage_positions.vcf",
     conda:
         "./envs/bioinformatics.yaml"
     shell:
@@ -351,10 +349,29 @@ rule get_sample_lineage_and_F2:
         # create VCF file of just the lineage positions, which will be used by the F2 metric script. Per the documentation, if --regions-file is a tab-delimited file, then it needs two columns (CHROM and POS), and POS is 1-indexed and inclusive
         # THIS IS DIFFERENT BEHAVIOR FROM IF IT WAS A BED FILE OR IF YOU USE BEDTOOLS. IN BOTH OF THOSE CASES, YOU NEED THREE COLUMNS (CHROM, BEG, AND END), AND THEY ARE 0-INDEXED WITH END BEING EXCLUSIVE (I.E. HALF-OPEN)
         bcftools view {output.bcf_file} --regions-file {params.lineage_pos_for_F2} -O v -o {output.vcf_lineage_positions}   
-        
-        fast-lineage-caller {output.vcf_file_variants_only} --pass --out {output.fast_lineage_caller_output}
+        """
 
-        python3 -u {params.F2_metric_script} -i f"{params.output_dir}/{wildcards.sample_ID}"
+
+rule lineage_typing:
+    input:
+        bcf_file = f"{sample_out_dir}/lineage/{{sample_ID}}.bcf",
+        bcf_index_file = f"{sample_out_dir}/lineage/{{sample_ID}}.bcf.csi",
+        vcf_lineage_positions = f"{sample_out_dir}/lineage/{{sample_ID}}_lineage_positions.vcf",
+        vcf_file_variants_only = f"{sample_out_dir}/pilon/{{sample_ID}}_variants.vcf",
+    params:
+        lineage_SNP_info = os.path.join(references_dir, "phylogeny", "Coll2014_SNPs_all.csv"),
+        F2_metric_script = os.path.join(scripts_dir, "calculate_F2_metric.py"),
+        output_dir = output_dir,        
+    output:
+        F2_metric_output = f"{sample_out_dir}/lineage/F2_Coll2014.txt",
+        fast_lineage_caller_output = f"{sample_out_dir}/lineage/fast_lineage_caller_output.txt",
+    shell:
+        """
+        python3 -u {params.F2_metric_script} -i {params.output_dir}/{wildcards.sample_ID} -o {output.F2_metric_output} --lineage-file {params.lineage_SNP_info}
+
+        rm {input.bcf_file} {input.bcf_index_file} {input.vcf_lineage_positions}
+
+        fast-lineage-caller {input.vcf_file_variants_only} --pass --out {output.fast_lineage_caller_output}
         """
 
 
@@ -365,76 +382,91 @@ rule combine_codon_variants:
         vcf_file_variants_combinedCodons = f"{sample_out_dir}/pilon/{{sample_ID}}_variants_combinedCodons.vcf",
     params:
         combine_codon_variants_script = os.path.join(scripts_dir, "combine_codon_variants.py"),
-        annot_fName = config["annot_VCF_name"],
-    run:
-        shell(
-            """
-            # this creates _variants_combined_codons.vcf in the same directory as the input VCF. You can also specify the -o flag if you want to write the output file somewhere else
-            python3 -u {params.combine_codon_variants_script} -i {input.vcf_file_variants_only}            
-            """
-        )
+    shell:
+        """
+        # this creates _variants_combined_codons.vcf in the same directory as the input VCF. You can also specify the -o flag if you want to write the output file somewhere else
+        python3 -u {params.combine_codon_variants_script} -i {input.vcf_file_variants_only}        
+        """
 
-        # then write the file name to the text file to keep track of files to be annotated with snpEff in the next rule
-        with open({params.annot_fName}, 'w+') as file:
-            for vcf_fName in {output.vcf_file_variants_combinedCodons}:
-                file.write(vcf_fName + "\n")
 
 
 rule annotate_variants_snpEff:
     input:
         vcf_file_variants_combinedCodons = f"{sample_out_dir}/pilon/{{sample_ID}}_variants_combinedCodons.vcf",
     output:
-        vcf_file_variants_combinedCodons_annot = f"{sample_out_dir}/pilon/{{sample_ID}}_variants_combinedCodons.eff.vcf",
+        vcf_file_variants_combinedCodons_annot = f"{sample_out_dir}/WHO_resistance/{{sample_ID}}_variants_combinedCodons.eff.vcf",
     conda:
         "./envs/bioinformatics.yaml"
     params:
-        annot_fName = config["annot_VCF_name"],
         snpEff_db = config['snpEff_db'],
     shell:
         """
-        snpEff eff {params.snpEff_db} -noStats -no-downstream -no-upstream -lof -fileList {params.annot_fName}
+        snpEff eff {params.snpEff_db} -noStats -no-downstream -no-upstream -lof {input.vcf_file_variants_combinedCodons} > {output.vcf_file_variants_combinedCodons_annot}
 
-        # then delete the text file so that VCFs don't get re-annotated in later runs
-        rm {params.annot_fName}
+        rm {input.vcf_file_variants_combinedCodons}
         """
 
 
-rule write_WHO_catalog_variants_TSV:
+
+rule create_WHO_catalog_variants_TSV:
     input:
-        vcf_file_variants_combinedCodons_annot = f"{sample_out_dir}/pilon/{{sample_ID}}_variants_combinedCodons.eff.vcf",
+        vcf_file_variants_combinedCodons_annot = f"{sample_out_dir}/WHO_resistance/{{sample_ID}}_variants_combinedCodons.eff.vcf",
     output:
-        vcf_file_bgzip = temp(f"{sample_out_dir}/pilon/{{sample_ID}}_variants_combinedCodons.eff.vcf.bgz"),
-        vcf_file_bgzip_tbi = temp(f"{sample_out_dir}/pilon/{{sample_ID}}_variants_combinedCodons.eff.vcf.bgz.tbi"),
-        variants_file_tsv = f"{sample_out_dir}/pilon/{{sample_ID}}_variants.tsv",
+        vcf_file_bgzip = temp(f"{sample_out_dir}/WHO_resistance/{{sample_ID}}_variants_combinedCodons.eff.vcf.bgz"),
+        vcf_file_bgzip_tbi = temp(f"{sample_out_dir}/WHO_resistance/{{sample_ID}}_variants_combinedCodons.eff.vcf.bgz.tbi"),
+        variants_file_tsv = f"{sample_out_dir}/WHO_resistance/{{sample_ID}}_variants.tsv",
     params:
-        WHO_catalog_regions_BED_file = os.path.join(references_dir, "WHO_catalog_regions.bed"),
+        WHO_catalog_regions_BED_file = os.path.join(references_dir, "WHO_catalog_resistance", "regions.bed"),
     conda:
         "./envs/bioinformatics.yaml"
     shell:
         """
         # need to bgzip the VCF file to use bcftools view with the region argument. NEED TO PUT "" AROUND FILE NAME TO PROPERLY CONSIDER SPECIAL CHARACTERS IN FILENAME
-        bgzip -c {inpput.vcf_file_variants_combinedCodons_annot} > {output.vcf_file_bgzip}
+        bgzip -c {input.vcf_file_variants_combinedCodons_annot} > {output.vcf_file_bgzip}
     
         # tabix the bgzipped file, which will create fName.bgz.tbi
-        tabix -0 -p vcf {output.vcf_file_bgzip} -f
+        tabix -p vcf -f {output.vcf_file_bgzip}
 
         bcftools view -R {params.WHO_catalog_regions_BED_file} {output.vcf_file_bgzip} | SnpSift extractFields '-' POS REF ALT FILTER QUAL IMPRECISE AF DP BQ MQ IC DC ANN -e "" > {output.variants_file_tsv}
         """
 
+
 rule get_WHO_catalog_resistance_predictions:
     input:
-        variants_file_tsv = f"{sample_out_dir}/pilon/{{sample_ID}}_variants.tsv",
+        variants_file_tsv = f"{sample_out_dir}/WHO_resistance/{{sample_ID}}_variants.tsv",
     output:
-        variants_file_tsv_annot = f"{sample_out_dir}/pilon/{{sample_ID}}_variants_annot.tsv",
-        out_fName="$out_dir/$sample_ID/WHO_resistance/${sample_ID}_pred.csv",
+        variants_file_tsv_annot = f"{sample_out_dir}/WHO_resistance/{{sample_ID}}_variants_annot.tsv",
+        predictions_fName = f"{sample_out_dir}/WHO_resistance/{{sample_ID}}_pred_AF_thresh_75.csv",
+        predictions_fName_lowAF = f"{sample_out_dir}/WHO_resistance/{{sample_ID}}_pred_AF_thresh_25.csv",
     params:
-        process_variants_WHO_catalog_script = os.path.join(scripts_dir, "process_variants_WHO_catalog_script.py"),
+        output_file_basename = f"{sample_out_dir}/WHO_resistance/{{sample_ID}}_pred",
+        process_variants_WHO_catalog_script = os.path.join(scripts_dir, "process_variants_for_WHO_catalog.py"),
         get_WHO_resistance_predictions_script = os.path.join(scripts_dir, "WHO_catalog_resistance_pred.py"),
     shell:
         """
         python3 -u {params.process_variants_WHO_catalog_script} -i {input.variants_file_tsv}
+        rm {input.variants_file_tsv}
 
         # get resistance predictions -- any Group 1 or 2 variant that passes QC leads to a prediction of R for a given drug. If not, predicted S
-        python3 -u {params.get_WHO_resistance_predictions_script} -i {output.variants_file_tsv_annot} -o $out_fName
-        python3 -u {params.get_WHO_resistance_predictions_script} -i {output.variants_file_tsv_annot} -o $out_fName --AF-thresh 0.25
+        python3 -u {params.get_WHO_resistance_predictions_script} -i {output.variants_file_tsv_annot} -o {params.output_file_basename}
+        python3 -u {params.get_WHO_resistance_predictions_script} -i {output.variants_file_tsv_annot} -o {params.output_file_basename} --AF-thresh 0.25
+        """
+
+
+rule get_SNPs_for_phylogenetic_tree:
+    input:
+        vcf_file_gzip = f"{sample_out_dir}/pilon/{{sample_ID}}_full.vcf.gz",
+    output:
+        vcf_SNP_sites = temp(f"{sample_out_dir}/lineage/SNP_sites.tsv"),
+        vcf_SNP_sites_gzip = f"{sample_out_dir}/lineage/SNP_sites.tsv.gz",
+    conda:
+        "./envs/bioinformatics.yaml"
+    params:
+        exclude_regions_BED_file = os.path.join(references_dir, "phylogeny", "exclude_regions.bed"),
+    shell:
+        """
+        # exclude structural variants (SVTYPE)
+        gunzip -c {input.vcf_file_gzip} | bcftools filter -e "SVTYPE == 'INS' | SVTYPE == 'DEL'" | bedtools subtract -a '-' -b {params.exclude_regions_BED_file} | SnpSift extractFields '-' POS REF ALT FILTER QUAL AF DP BQ MQ -e "" > {output.vcf_SNP_sites}
+
+        gzip -c {output.vcf_SNP_sites} > {output.vcf_SNP_sites_gzip}
         """
