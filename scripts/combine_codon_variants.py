@@ -7,7 +7,7 @@ h37Rv_genes_df = pd.read_csv("./references/ref_genome/mycobrowser_h37rv_genes_v4
 
 # dataframe of the gene(s) that each position of H37Rv is in. This was made from the mycobrowser genes dataframe above, so the same genes and noncoding regions are reflected
 # only positions in coding regions are included in this file
-h37Rv_coords_to_gene = pd.read_csv("./references/ref_genome/H37Rv_coords_to_gene.csv")
+h37Rv_coords_to_gene = pd.read_csv("./references/ref_genome/H37Rv_coords_to_gene.csv.gz", compression='gzip')
 
 h37Rv = SeqIO.read("./references/ref_genome/GCF_000195955.2_ASM19595v2_genomic.gbff", "genbank")
 
