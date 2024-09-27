@@ -16,46 +16,6 @@ snakemake --dag | dot -Tsvg > dag.svg
 snakemake --rulegraph | dot -Tsvg > dag.svg
 ```
 
-To make the custom kraken database (assuming yours is named 20240915_humanAdaptedMTBC_DB), follow these instructions:
-
-```bash
-DB_NAME="20240915_humanAdaptedMTBC_DB"
-
-kraken2-build --download-taxonomy --db $DB_NAME
-
-# use FTP to avoid rsync connection problems to NCBI
-kraken2-build --download-library bacteria --db $DB_NAME --use-ftp
-```
-
-To add your own genomes to the database, they must have a taxid in the FASTA file header, so add the human-adapted MTBC taxid (1773)
-
-```python
-for fName in glob.glob("./kraken_db/genomes/*.fasta"):
-
-    # added these manually by searching their exact taxids
-    if not os.path.basename(fName).startswith('GCF'):
-   
-        sequences = [(seq.id, seq.seq) for seq in SeqIO.parse(fName, "fasta")]
-        assert len(sequences) == 1
-            
-        # make the header the sample name
-        header = os.path.basename(fName).split('.')[0]
-
-        # add |kraken:taxid|1773 to the header for each one
-        header += '|kraken:taxid|1773'
-    
-        with open(fName, "w") as file:
-            file.write(f">{header}\n")
-            file.write(str(sequences[0][1]) + "\n")
-```
-
-```bash
-for file in "./kraken_db/genomes/*.fasta"
-do
-    kraken2-build --add-to-library $file --db $DBNAME
-done
-```
-
 <!-- rule repair_reads_bbmap:
     input:
         fastq1=f"{run_out_dir}/fastq/{{run_ID}}_R1.fastq.gz",
@@ -69,3 +29,8 @@ done
         """
         bash $CONDA_PREFIX/bin/repair.sh in={input.fastq1} in2={input.fastq2} out={output.fastq1_fixed} out2={output.fastq2_fixed}
         """ -->
+
+```bash
+# get all human-adapted MTBC taxids
+esearch -db taxonomy -query "txid1773[Subtree]" | efetch -format uid > ./references/phylogeny/human_MTBC_taxids.txt
+```

@@ -14,6 +14,9 @@ rule get_input_FASTQ_files:
     output:
         fastq1 = f"{run_out_dir}/{{run_ID}}_R1.fastq.gz",
         fastq2 = f"{run_out_dir}/{{run_ID}}_R2.fastq.gz",
+
+        fastq1_unzipped = temp(f"{run_out_dir}/{{run_ID}}_1.fastq"),
+        fastq2_unzipped = temp(f"{run_out_dir}/{{run_ID}}_2.fastq"),
     params:
         sample_out_dir = sample_out_dir,
         fastq_dir = config["fastq_dir"],
@@ -31,6 +34,30 @@ rule get_input_FASTQ_files:
                 # they will be deleted in the next rule after performing adapter trimming, so they won't be doubly stored
                 cp {params.fastq_dir}/{wildcards.run_ID}/{wildcards.run_ID}_R1.fastq.gz {output.fastq1}
                 cp {params.fastq_dir}/{wildcards.run_ID}/{wildcards.run_ID}_R2.fastq.gz {output.fastq2}
+
+                gunzip -c {output.fastq1} > {output.fastq1_unzipped}
+                gunzip -c {output.fastq2} > {output.fastq2_unzipped}
+
+                # first check that the original FASTQ files have the same numbers of lines
+                FQ1_line_count=$(wc -l {output.fastq1_unzipped} | awk '{{print $1}}')
+                FQ2_line_count=$(wc -l {output.fastq2_unzipped} | awk '{{print $1}}')
+                
+                # check that neither FASTQ file has no reads
+                if [ $FQ1_line_count -eq 0 ] || [ $FQ2_line_count -eq 0 ]; then
+                    echo "Error: At least one of the FASTQ files for $sample_ID/$run_ID has no reads"
+                    exit 1
+                # Compare the counts and raise an error if they are not equal 
+                elif [ "$FQ1_line_count" -ne "$FQ2_line_count" ]; then
+                    echo "Error: FASTQ files for $sample_ID/$run_ID have different line counts: $FQ1_line_count and $FQ2_line_count"
+                    exit 1
+                fi
+                
+                # compare paired end read files. If they are the same, then add to error list. Suppress output with -s tag, so it doesn't print out the differences
+                # If the files are identical, the exit status is 0, and the condition is considered true, so an error will be returned.
+                if cmp -s {output.fastq1_unzipped} {output.fastq2_unzipped}; then
+                   echo "Error: {output.fastq1_unzipped} and {output.fastq2_unzipped} are duplicates"
+                   exit 1
+                fi
             """)
 
 
@@ -44,14 +71,14 @@ rule trim_adapters:
         fastp_html = f"{run_out_dir}/fastp/fastp.html",
         fastp_json = f"{run_out_dir}/fastp/fastp.json"
     conda:
-        "./envs/bioinformatics.yaml"
+        "./envs/read_processing_aln.yaml"
     params:
         min_read_length = config["min_read_length"]
     shell:
         """
         fastp -i {input.fastq1} -I {input.fastq2} -o {output.fastq1_trimmed} -O {output.fastq2_trimmed} -h {output.fastp_html} -j {output.fastp_json} --length_required {params.min_read_length} --dedup --thread 8
 
-        # rm {input.fastq1} {input.fastq2}
+        rm {input.fastq1} {input.fastq2}
         """
 
 rule kraken_classification:
@@ -64,7 +91,7 @@ rule kraken_classification:
         kraken_report = f"{run_out_dir}/kraken/kraken_report",
         kraken_classifications = temp(f"{run_out_dir}/kraken/kraken_classifications"),
     conda:
-        "./envs/bioinformatics.yaml"
+        "./envs/read_processing_aln.yaml"
     params:
         kraken_db = config["kraken_db"],
         output_dir = output_dir,
@@ -76,6 +103,50 @@ rule kraken_classification:
         rm {input.fastq1_trimmed} {input.fastq2_trimmed}
         """
 
+# Checkpoint to run Kraken classification
+checkpoint kraken_classify:
+    input:
+        "path/to/input_file"  # Your input data (e.g., FASTQ file)
+    output:
+        kraken_report="path/to/kraken_report.txt"
+    shell:
+        """
+        # Run Kraken classification and generate report
+        kraken2 --db {params.kraken_db} --output {output.kraken_report} {input}
+        """
+
+# Function to check if Kraken classification passes the threshold
+def check_kraken_classification(wildcards):
+    checkpoint_output = checkpoints.kraken_classify.get(**wildcards).output.kraken_report
+    
+    # Read the unclassified percentage from the Kraken report
+    with open(checkpoint_output) as f:
+        for line in f:
+            if 'unclassified' in line:
+                unclassified_percent = float(line.split()[0])
+                break
+    
+    if unclassified_percent > kraken_unclassified_max:
+        # Skip the next step if the unclassified percentage is too high
+        raise ValueError(f"Unclassified percentage {unclassified_percent}% exceeds the threshold")
+    
+    # Return the path to the next output if the threshold passes
+    return "path/to/next_output_file"
+
+# Rule for the next step, e.g., downstream analysis (only runs if classification passes)
+rule downstream_analysis:
+    input:
+        # Use the function to check the threshold and proceed conditionally
+        check_kraken_classification
+    output:
+        "path/to/next_output_file"
+    shell:
+        """
+        # Perform downstream analysis
+        echo "Running downstream analysis on {input}"
+        """
+
+
 rule fastlin_typing:
     input:
         fastq1_trimmed_classified=f"{run_out_dir}/kraken/{{run_ID}}_1.kraken.filtered.fastq",
@@ -86,7 +157,7 @@ rule fastlin_typing:
         fastlin_dir = directory(f"{run_out_dir}/fastlin"),
         fastlin_output = f"{run_out_dir}/fastlin/output.txt"
     conda:
-        "./envs/bioinformatics.yaml"
+        "./envs/read_processing_aln.yaml"
     params:
         fastlin_barcodes = os.path.join(references_dir, "phylogeny", "MTBC_barcodes.tsv"),
     shell:
@@ -155,13 +226,15 @@ rule check_fastlin:
         fastlin_output = f"{run_out_dir}/fastlin/output.txt"
     run:
         if not does_sample_pass_fastlin(params.output_dir, wildcards.sample_ID):
-            raise ValueError(f"Halting pipeline for {wildcards.sample_ID} because the different WGS runs for it have different lineages assigned by fastlin")
+            print(f"Halting pipeline for {wildcards.sample_ID} because the different WGS runs for it have different lineages assigned by fastlin")
+            exit()
 
 
 rule align_reads_mark_duplicates:
     input:
         # require the fastlin output file as an input so that the fastlin rule gets run
         fastlin_output = f"{run_out_dir}/fastlin/output.txt",
+        kraken_report = f"{run_out_dir}/kraken/kraken_report",
         fastq1_trimmed_classified=f"{run_out_dir}/kraken/{{run_ID}}_1.kraken.filtered.fastq",
         fastq2_trimmed_classified=f"{run_out_dir}/kraken/{{run_ID}}_2.kraken.filtered.fastq",
     output:
@@ -173,11 +246,29 @@ rule align_reads_mark_duplicates:
         bam_index_file_dedup = f"{run_out_dir}/bam/{{run_ID}}.dedup.bam.bai",
     params:
         output_dir = output_dir,
+        kraken_unclassified_max = config["kraken_unclassified_max"],
         ref_genome = os.path.join(references_dir, "ref_genome", "H37Rv_NC_000962.3.fna"),
     conda:
-        "./envs/bioinformatics.yaml"
+        "./envs/read_processing_aln.yaml"
     shell:
         """
+        # only include runs with kraken classified proportion of at least 75%. Otherwise, they are highly contaminated
+        unclassified_percent=$(cat {input.kraken_report} | grep unclassified  | awk '{{print $1}}')
+
+        # unclassified_percent can be None if there are 0 unclassified reads (so all the reads map to MTBC)
+        # in that case, the if statement below, will fail, so have to check if it's None
+        if [ -z "$unclassified_percent" ]; then
+            unclassified_percent=0
+        fi
+
+        # stop if kraken-classified percentage is too high
+        if [ "$(awk 'BEGIN{print ('$unclassified_percent' > {params.kraken_unclassified_max})}')" -eq 1 ]; then
+            echo "$unclassified_percent of reads do not map to MTBC, which is below the threshold {params.kraken_unclassified_max} for inclusion. Halting this sample"
+            exit
+        else
+            echo "$unclassified_percent of reads do not map to MTBC, which passes the threshold {params.kraken_unclassified_max} for inclusion"
+        fi
+
         # index reference genome (which is required before aligning reads)
         bwa-mem2 index {params.ref_genome}
 
@@ -210,7 +301,7 @@ rule get_BAM_file_depths:
     output:
         depth_file = f"{sample_out_dir}/bam/{{sample_ID}}.depth.tsv",
     conda:
-        "./envs/bioinformatics.yaml"
+        "./envs/read_processing_aln.yaml"
     shell:
         """
         # Write all .bam files to a text file
@@ -263,7 +354,7 @@ rule merge_BAMs:
         merged_bam_file = f"{sample_out_dir}/bam/{{sample_ID}}.dedup.bam",
         merged_bam_index_file = f"{sample_out_dir}/bam/{{sample_ID}}.dedup.bam.bai",
     conda:
-        "./envs/bioinformatics.yaml"
+        "./envs/read_processing_aln.yaml"
     params:
         ref_genome = os.path.join(references_dir, "ref_genome", "H37Rv_NC_000962.3.fna"),
         sample_out_dir = sample_out_dir,
@@ -301,19 +392,20 @@ rule merge_BAMs:
         fi
         """
 
-rule variant_calling:
+
+rule pilon_variant_calling:
     input:
         merged_bam_file = f"{sample_out_dir}/bam/{{sample_ID}}.dedup.bam",
     output:
         vcf_file = temp(f"{sample_out_dir}/pilon/{{sample_ID}}.vcf"),
         vcf_file_gzip = f"{sample_out_dir}/pilon/{{sample_ID}}_full.vcf.gz",
         vcf_file_variants_only = f"{sample_out_dir}/pilon/{{sample_ID}}_variants.vcf",
-        fasta_file = f"{sample_out_dir}/pilon/{{sample_ID}}.fasta",        
+        fasta_file = temp(f"{sample_out_dir}/pilon/{{sample_ID}}.fasta"),        
     params:
         ref_genome = os.path.join(references_dir, "ref_genome", "H37Rv_NC_000962.3.fna"),
         sample_pilon_dir = f"{sample_out_dir}/pilon",
     conda:
-        "./envs/bioinformatics.yaml"
+        "./envs/variant_calling.yaml"
     shell:
         """
         pilon -Xmx30g --minmq 1 --genome {params.ref_genome} --bam {input.merged_bam_file} --output {wildcards.sample_ID} --outdir {params.sample_pilon_dir} --variant
@@ -324,6 +416,32 @@ rule variant_calling:
         # save the variants only (non-REF calls) to another VCF file
         bcftools view --types snps,indels,mnps,other {output.vcf_file_gzip} > {output.vcf_file_variants_only}
         """
+
+
+
+# rule freebayes_variant_calling:
+#     input:
+#         merged_bam_file = f"{sample_out_dir}/bam/{{sample_ID}}.dedup.bam",
+#     output:
+#         vcf_file = temp(f"{sample_out_dir}/freebayes/{{sample_ID}}.vcf"),
+#         vcf_file_gzip = f"{sample_out_dir}/freebayes/{{sample_ID}}_full.vcf.gz",
+#         vcf_file_SNPs_only = f"{sample_out_dir}/freebayes/{{sample_ID}}_SNPs.vcf",
+#     params:
+#         ref_genome = os.path.join(references_dir, "ref_genome", "H37Rv_NC_000962.3.fna"),
+#     conda:
+#         "./envs/variant_calling.yaml"
+#     shell:
+#         """
+#         # use ploidy of 1
+#         freebayes -f {params.ref_genome} -p 1 {input.merged_bam_file} > {output.vcf_file}
+
+#         # then gzip the full VCF file and delete the unzipped version. Also delete the FASTA file because it's not needed
+#         gzip -c {output.vcf_file} > {output.vcf_file_gzip}
+
+#         # save SNPs only to another VCF file
+#         bcftools view --types snps,mnps {output.vcf_file_gzip} > {output.vcf_file_SNPs_only}
+#         """
+
 
 
 rule create_lineage_helper_files:
@@ -337,7 +455,7 @@ rule create_lineage_helper_files:
         bcf_index_file = f"{sample_out_dir}/lineage/{{sample_ID}}.bcf.csi",
         vcf_lineage_positions = f"{sample_out_dir}/lineage/{{sample_ID}}_lineage_positions.vcf",
     conda:
-        "./envs/bioinformatics.yaml"
+        "./envs/variant_calling.yaml"
     shell:
         """
         # convert the full VCF file to a BCF fileto get only the lineage-defining positions according to the Coll 2014 scheme
@@ -396,7 +514,7 @@ rule annotate_variants_snpEff:
     output:
         vcf_file_variants_combinedCodons_annot = f"{sample_out_dir}/WHO_resistance/{{sample_ID}}_variants_combinedCodons.eff.vcf",
     conda:
-        "./envs/bioinformatics.yaml"
+        "./envs/variant_annotation.yaml"
     params:
         snpEff_db = config['snpEff_db'],
     shell:
@@ -418,7 +536,7 @@ rule create_WHO_catalog_variants_TSV:
     params:
         WHO_catalog_regions_BED_file = os.path.join(references_dir, "WHO_catalog_resistance", "regions.bed"),
     conda:
-        "./envs/bioinformatics.yaml"
+        "./envs/variant_annotation.yaml"
     shell:
         """
         # need to bgzip the VCF file to use bcftools view with the region argument. NEED TO PUT "" AROUND FILE NAME TO PROPERLY CONSIDER SPECIAL CHARACTERS IN FILENAME
@@ -460,7 +578,7 @@ rule get_SNPs_for_phylogenetic_tree:
         vcf_SNP_sites = temp(f"{sample_out_dir}/lineage/SNP_sites.tsv"),
         vcf_SNP_sites_gzip = f"{sample_out_dir}/lineage/SNP_sites.tsv.gz",
     conda:
-        "./envs/bioinformatics.yaml"
+        "./envs/variant_annotation.yaml"
     params:
         exclude_regions_BED_file = os.path.join(references_dir, "phylogeny", "exclude_regions.bed"),
     shell:

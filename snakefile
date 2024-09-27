@@ -23,4 +23,4 @@ rule all:
         # [f"{output_dir}/{sample_ID}/bam/{sample_ID}.dedup.bam" for sample_ID in sample_run_dict.keys()],
         [f"{output_dir}/{sample_ID}/lineage/F2_Coll2014.txt" for sample_ID in sample_run_dict.keys()],
         [f"{output_dir}/{sample_ID}/WHO_resistance/{sample_ID}_pred_AF_thresh_75.csv" for sample_ID in sample_run_dict.keys()],
-        # [f"{output_dir}/{sample_ID}/lineage/SNP_sites.tsv.gz" for sample_ID in sample_run_dict.keys()]
+        # [f"{output_dir}/{sample_ID}/pilon/{sample_ID}_variants_combinedCodons.vcf" for sample_ID in sample_run_dict.keys()],

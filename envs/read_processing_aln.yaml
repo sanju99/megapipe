@@ -1,0 +1,12 @@
+name: read_processing_aln
+channels:
+  - bioconda
+  - conda-forge
+  - defaults
+dependencies:
+  - fastp
+  - kraken2
+  - fastlin
+  - bwa-mem2=2.2.1
+  - picard
+  - samtools

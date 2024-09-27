@@ -1,7 +1,8 @@
-output_dir: "/n/scratch/users/s/sak0914/smk_output" #/n/data1/hms/dbmi/farhat/rollingDB/genomic_data"
-fastq_dir: "/n/data1/hms/dbmi/farhat/rollingDB/fastq_db"
-isolates_to_run: "./test/CASS_isolates.tsv"
-kraken_db: "/n/data1/hms/dbmi/farhat/mtb_data/kraken/20220922_mtbDB"
+output_dir: "/n/data1/hms/dbmi/farhat/rollingDB/TRUST/WGS" #"/n/scratch/users/s/sak0914/smk_output" #/n/data1/hms/dbmi/farhat/rollingDB/genomic_data"
+fastq_dir: "/n/scratch/users/s/sak0914/TRUST_FASTQ" #"/n/data1/hms/dbmi/farhat/rollingDB/fastq_db"
+isolates_to_run: "TRUST_isolates_to_run.tsv" #"./SRA_all/isolates_to_run.tsv"
+kraken_db: "./kraken_db/custom_human_MTBC" #"/n/data1/hms/dbmi/farhat/mtb_data/kraken/20220922_mtbDB"
+kraken_unclassified_max: 15
 scripts_dir: "./scripts"
 references_dir: "./references"
 min_read_length: 50

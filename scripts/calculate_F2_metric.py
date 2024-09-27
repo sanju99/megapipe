@@ -225,7 +225,7 @@ def calculate_F2(sorted_minor_allele_fraction_per_SNP_set, lineage_SNP_depths_fr
         # calculate the minor allele fraction
         p2 = float(M2) / float(D2)
 
-    except AttributError:
+    except AttributeError:
         # df may be empty!
         p2 = np.nan
 
